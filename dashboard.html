@@ -1,0 +1,941 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard de Mapeamento</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f3f4f6;
+            background-image: url('https://drive.google.com/uc?export=view&id=1OBiWuHA2fH4hcy3Ni4wOG5iMxugFOdmi');
+            background-size: cover;
+            background-position: center;
+            background-repeat: no-repeat;
+            background-attachment: fixed;
+        }
+        .card {
+            background-color: rgba(255, 255, 255, 0.8);
+            border-radius: 1rem;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+            transition: transform 0.2s;
+        }
+        .card:hover {
+            transform: translateY(-5px);
+        }
+        .social-card {
+            display: none;
+        }
+        .search-input-container {
+            border: 1px solid #d1d5db;
+            transition: box-shadow 0.2s ease-in-out, border-color 0.2s ease-in-out;
+        }
+        .search-input-container:focus-within {
+            border-color: #60a5fa;
+            box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.5);
+        }
+        input:focus {
+            outline: none;
+        }
+        #influencer-info {
+            display: none;
+        }
+        #loading-message {
+            display: none;
+            text-align: center;
+            color: #4b5563;
+            font-style: italic;
+        }
+        .loading-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(255, 255, 255, 0.7);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+            display: none;
+        }
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #3498db;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            overflow: auto;
+            background-color: rgb(0,0,0);
+            background-color: rgba(0,0,0,0.4);
+            padding-top: 60px;
+        }
+        .modal-content {
+            background-color: #fefefe;
+            margin: 5% auto;
+            padding: 20px;
+            border: 1px solid #888;
+            width: 80%;
+            border-radius: 1rem;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+            max-width: 600px;
+        }
+        .close-button {
+            color: #aaa;
+            float: right;
+            font-size: 28px;
+            font-weight: bold;
+        }
+        .close-button:hover,
+        .close-button:focus {
+            color: black;
+            text-decoration: none;
+            cursor: pointer;
+        }
+    </style>
+    <!-- Firebase SDK -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, setPersistence, browserSessionPersistence } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, onSnapshot, collection, addDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Variáveis globais fornecidas pelo ambiente do canvas
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+        let db;
+        let auth;
+        let userId = null;
+        let influencersData = {};
+        
+        // Dados iniciais hardcoded
+        const initialInfluencers = {
+            'Dona Rúbia': {
+                city: 'Nova Friburgo - Estado do Rio de Janeiro',
+                youtube_channel_id: 'UCrwCDZxHQPI_25TNiK051BA',
+                youtube_stats: null, // Campo para as métricas do YouTube
+                instagram: {
+                    handle: 'canalclarear',
+                    followers: 65000,
+                    reels_avg_views: 12500,
+                    reels_avg_likes: 2400,
+                    reels_avg_comments: 50
+                },
+                tiktok: {
+                    handle: 'dona.rubia',
+                    followers: 25000,
+                    avg_views: 5000,
+                    avg_likes: 1200,
+                    avg_comments: 30
+                },
+                facebook: {
+                    handle: 'canalclarear',
+                    followers: 10000,
+                    avg_views: 3000,
+                    avg_likes: 800,
+                    avg_comments: 15
+                }
+            }
+        };
+
+        async function initFirebase() {
+            try {
+                const app = initializeApp(firebaseConfig);
+                db = getFirestore(app);
+                auth = getAuth(app);
+
+                await setPersistence(auth, browserSessionPersistence);
+                
+                onAuthStateChanged(auth, async (user) => {
+                    if (user) {
+                        userId = user.uid;
+                        loadInfluencersFromFirestore();
+                    } else {
+                        if (initialAuthToken) {
+                            await signInWithCustomToken(auth, initialAuthToken);
+                        } else {
+                            await signInAnonymously(auth);
+                        }
+                    }
+                });
+            } catch (error) {
+                console.error("Erro ao inicializar Firebase:", error);
+            }
+        }
+
+        async function loadInfluencersFromFirestore() {
+            if (!userId) {
+                console.log("UserID não disponível, não é possível carregar dados.");
+                return;
+            }
+
+            const influencersCollection = collection(db, 'artifacts', appId, 'users', userId, 'influencers');
+            
+            onSnapshot(influencersCollection, (snapshot) => {
+                const newInfluencersData = { ...initialInfluencers };
+                snapshot.forEach((doc) => {
+                    const data = doc.data();
+                    newInfluencersData[data.name] = data;
+                });
+                influencersData = newInfluencersData;
+                populateInfluencerList();
+            }, (error) => {
+                console.error("Erro ao carregar dados do Firestore:", error);
+            });
+        }
+        
+        // Expõe funções para o escopo global para os manipuladores de eventos
+        window.searchAndDisplayMetrics = searchAndDisplayMetrics;
+        window.saveNewInfluencer = saveNewInfluencer;
+        window.initFirebase = initFirebase;
+        window.influencersData = influencersData;
+        window.formatNumber = formatNumber;
+        window.roundCustom = roundCustom;
+        window.getClassification = getClassification;
+        window.populateInfluencerList = populateInfluencerList;
+        window.openModal = openModal;
+        window.closeModal = closeModal;
+        window.showAlert = showAlert;
+        window.exportMetricsToCSV = exportMetricsToCSV;
+
+        window.addEventListener('load', initFirebase);
+
+        function populateInfluencerList() {
+            const datalist = document.getElementById('influencer-list');
+            datalist.innerHTML = '';
+            for (const name in influencersData) {
+                const option = document.createElement('option');
+                option.value = name;
+                datalist.appendChild(option);
+            }
+        }
+        
+        function formatNumber(num) {
+            if (num >= 1000000) {
+                return (num / 1000000).toFixed(1) + 'M';
+            }
+            if (num >= 1000) {
+                return (num / 1000).toFixed(1) + 'K';
+            }
+            return Math.round(num);
+        }
+
+        function roundCustom(num) {
+            const decimalPart = num % 1;
+            if (decimalPart > 0.6) {
+                return Math.ceil(num);
+            } else {
+                return Math.floor(num);
+            }
+        }
+
+        function getClassification(totalFollowers) {
+            if (totalFollowers > 5000000) {
+                return 'Hero';
+            }
+            if (totalFollowers >= 1000000) {
+                return 'Macro';
+            }
+            if (totalFollowers >= 200000) {
+                return 'Mid-tier';
+            }
+            if (totalFollowers >= 10000) {
+                return 'Micro';
+            }
+            return 'Nano/UGC';
+        }
+
+        async function searchAndDisplayMetrics() {
+            const influencerName = document.getElementById('influencer-input').value.trim();
+            const influencer = influencersData[influencerName];
+            const loadingMessage = document.getElementById('loading-message');
+            const influencerInfo = document.getElementById('influencer-info');
+            const profilePic = document.getElementById('influencer-profile-pic');
+            const influencerNameEl = document.getElementById('influencer-name');
+            const influencerCityEl = document.getElementById('influencer-city');
+            const influencerClassificationEl = document.getElementById('influencer-classification');
+
+            const selectedSocialMedia = Array.from(document.querySelectorAll('input[name="social-media"]:checked')).map(cb => cb.value);
+
+            document.querySelectorAll('.social-card').forEach(card => card.style.display = 'none');
+
+            if (influencer) {
+                loadingMessage.style.display = 'block';
+
+                influencerInfo.style.display = 'flex';
+                influencerNameEl.textContent = influencerName;
+                influencerCityEl.textContent = influencer.city;
+                
+                let totalFollowers = 0;
+
+                // Lógica para o YouTube
+                if (influencer.youtube_channel_id && (selectedSocialMedia.includes('all') || selectedSocialMedia.includes('youtube'))) {
+                    const youtubeMetricsEl = document.getElementById('youtube-metrics');
+                    const youtubeViewsAvgEl = document.getElementById('youtube-views-avg');
+                    const youtubeLikesAvgEl = document.getElementById('youtube-likes-avg');
+                    const youtubeCommentsAvgEl = document.getElementById('youtube-comments-avg');
+                    const youtubeEngagementRateEl = document.getElementById('youtube-engagement-rate');
+                    const cardYoutubeEl = document.getElementById('card-youtube');
+                    
+                    try {
+                        const apiKey = 'AIzaSyB99DwRu-X6NyUZXCZVNlK1xexkRkjM9mc';
+                        if (apiKey === 'COLE_SUA_CHAVE_AQUI' || apiKey.length < 10) {
+                            throw new Error("Chave da API do YouTube não configurada.");
+                        }
+                        const channelId = influencer.youtube_channel_id;
+
+                        // Busca informações do canal e foto de perfil
+                        const channelInfoUrl = `https://www.googleapis.com/youtube/v3/channels?part=snippet,statistics&id=${channelId}&key=${apiKey}`;
+                        const channelResponse = await fetch(channelInfoUrl);
+                        if (!channelResponse.ok) throw new Error(`Erro na API do YouTube (canal): ${channelResponse.statusText}`);
+                        const channelData = await channelResponse.json();
+                        
+                        if (channelData.items && channelData.items.length > 0) {
+                            const youtubeStats = channelData.items[0].statistics;
+                            const profilePicUrl = channelData.items[0].snippet.thumbnails.high.url;
+                            profilePic.src = profilePicUrl;
+                            
+                            totalFollowers += parseInt(youtubeStats.subscriberCount) || 0;
+                            
+                            youtubeMetricsEl.textContent = `${formatNumber(parseInt(youtubeStats.subscriberCount))} Inscritos`;
+
+                            const videoSearchUrl = `https://www.googleapis.com/youtube/v3/search?part=snippet&channelId=${channelId}&maxResults=100&order=date&type=video&key=${apiKey}`;
+                            const searchResponse = await fetch(videoSearchUrl);
+                            if (!searchResponse.ok) throw new Error(`Erro na API do YouTube (busca de vídeos): ${searchResponse.statusText}`);
+                            const searchData = await searchResponse.json();
+                            
+                            const now = new Date();
+                            const sevenDaysInMs = 7 * 24 * 60 * 60 * 1000;
+                            const validVideoIds = searchData.items.filter(item => (now - new Date(item.snippet.publishedAt)) <= sevenDaysInMs).map(item => item.id.videoId);
+
+                            if (validVideoIds.length > 0) {
+                                const videoStatsUrl = `https://www.googleapis.com/youtube/v3/videos?part=statistics&id=${validVideoIds.join(',')}&key=${apiKey}`;
+                                const videoStatsResponse = await fetch(videoStatsUrl);
+                                if (!videoStatsResponse.ok) throw new Error(`Erro na API do YouTube (estatísticas de vídeos): ${videoStatsResponse.statusText}`);
+                                const videoStatsData = await videoStatsResponse.json();
+
+                                let totalViews = 0;
+                                let totalLikes = 0;
+                                let totalComments = 0;
+
+                                if (videoStatsData.items && videoStatsData.items.length > 0) {
+                                    videoStatsData.items.forEach(video => {
+                                        totalViews += parseInt(video.statistics.viewCount) || 0;
+                                        totalLikes += parseInt(video.statistics.likeCount) || 0;
+                                        totalComments += parseInt(video.statistics.commentCount) || 0;
+                                    });
+                                }
+
+                                const videoCount = validVideoIds.length;
+                                const avgViews = totalViews / videoCount;
+                                const avgLikes = totalLikes / videoCount;
+                                const avgComments = totalComments / videoCount;
+                                const engagementRate = (avgViews > 0) ? ((avgLikes + avgComments) / avgViews) * 100 : 0;
+                                
+                                const roundedAvgComments = roundCustom(avgComments);
+
+                                youtubeViewsAvgEl.textContent = formatNumber(avgViews);
+                                youtubeLikesAvgEl.textContent = formatNumber(avgLikes);
+                                youtubeCommentsAvgEl.textContent = formatNumber(roundedAvgComments);
+                                youtubeEngagementRateEl.textContent = `${engagementRate.toFixed(2)}%`;
+                                
+                                // SALVANDO OS DADOS PARA EXPORTAÇÃO
+                                influencersData[influencerName].youtube_stats = {
+                                    subscriberCount: parseInt(youtubeStats.subscriberCount) || 0,
+                                    avgViews: avgViews,
+                                    avgLikes: avgLikes,
+                                    avgComments: roundedAvgComments
+                                };
+
+                            } else {
+                                youtubeViewsAvgEl.textContent = `N/A`;
+                                youtubeLikesAvgEl.textContent = `N/A`;
+                                youtubeCommentsAvgEl.textContent = `N/A`;
+                                youtubeEngagementRateEl.textContent = `N/A`;
+                            }
+                            cardYoutubeEl.style.display = 'flex';
+                        }
+                    } catch (error) {
+                        console.error('Erro ao buscar dados do YouTube:', error);
+                        profilePic.src = 'https://placehold.co/64x64/E2E8F0/A0AEC0?text=Foto';
+                        cardYoutubeEl.style.display = 'none'; // Esconde o card em caso de erro
+                    }
+                } else {
+                    profilePic.src = 'https://placehold.co/64x64/E2E8F0/A0AEC0?text=Foto';
+                }
+
+                // Lógica para o Instagram (agora via dados do objeto influencersData)
+                if (influencer.instagram && (selectedSocialMedia.includes('all') || selectedSocialMedia.includes('instagram'))) {
+                    const instagramData = influencer.instagram;
+                    const instagramMetricsEl = document.getElementById('instagram-metrics');
+                    const instagramViewsAvgEl = document.getElementById('instagram-views-avg');
+                    const instagramLikesAvgEl = document.getElementById('instagram-likes-avg');
+                    const instagramCommentsAvgEl = document.getElementById('instagram-comments-avg');
+                    const instagramEngagementRateEl = document.getElementById('instagram-engagement-rate');
+                    const cardInstagramEl = document.getElementById('card-instagram');
+
+                    if (instagramData) {
+                        totalFollowers += instagramData.followers;
+                        
+                        instagramMetricsEl.textContent = `${formatNumber(instagramData.followers)} Seguidores`;
+                        instagramViewsAvgEl.textContent = formatNumber(instagramData.reels_avg_views);
+                        instagramLikesAvgEl.textContent = formatNumber(instagramData.reels_avg_likes);
+                        instagramCommentsAvgEl.textContent = formatNumber(instagramData.reels_avg_comments);
+
+                        const engagementRate = ((instagramData.reels_avg_likes + instagramData.reels_avg_comments) / instagramData.followers) * 100;
+                        instagramEngagementRateEl.textContent = `${engagementRate.toFixed(2)}%`;
+
+                        cardInstagramEl.style.display = 'flex';
+                    }
+                }
+
+                // Lógica para o TikTok (agora via dados do objeto influencersData)
+                if (influencer.tiktok && (selectedSocialMedia.includes('all') || selectedSocialMedia.includes('tiktok'))) {
+                    const tiktokData = influencer.tiktok;
+                    const tiktokMetricsEl = document.getElementById('tiktok-metrics');
+                    const tiktokViewsAvgEl = document.getElementById('tiktok-views-avg');
+                    const tiktokLikesAvgEl = document.getElementById('tiktok-likes-avg');
+                    const tiktokCommentsAvgEl = document.getElementById('tiktok-comments-avg');
+                    const tiktokEngagementRateEl = document.getElementById('tiktok-engagement-rate');
+                    const cardTiktokEl = document.getElementById('card-tiktok');
+
+                    if (tiktokData) {
+                        totalFollowers += tiktokData.followers;
+                        
+                        tiktokMetricsEl.textContent = `${formatNumber(tiktokData.followers)} Seguidores`;
+                        // Lógica de engajamento para TikTok
+                        const engagementRate = ((tiktokData.avg_likes + tiktokData.avg_comments) / tiktokData.followers) * 100;
+                        tiktokViewsAvgEl.textContent = formatNumber(tiktokData.avg_views);
+                        tiktokLikesAvgEl.textContent = formatNumber(tiktokData.avg_likes);
+                        tiktokCommentsAvgEl.textContent = formatNumber(tiktokData.avg_comments);
+                        tiktokEngagementRateEl.textContent = `${engagementRate.toFixed(2)}%`;
+                        cardTiktokEl.style.display = 'flex';
+                    }
+                }
+
+                // Lógica para o Facebook (agora via dados do objeto influencersData)
+                if (influencer.facebook && (selectedSocialMedia.includes('all') || selectedSocialMedia.includes('facebook'))) {
+                    const facebookData = influencer.facebook;
+                    const facebookMetricsEl = document.getElementById('facebook-metrics');
+                    const facebookViewsAvgEl = document.getElementById('facebook-views-avg');
+                    const facebookLikesAvgEl = document.getElementById('facebook-likes-avg');
+                    const facebookCommentsAvgEl = document.getElementById('facebook-comments-avg');
+                    const facebookEngagementRateEl = document.getElementById('facebook-engagement-rate');
+                    const cardFacebookEl = document.getElementById('card-facebook');
+
+                    if (facebookData) {
+                        totalFollowers += facebookData.followers;
+                        
+                        facebookMetricsEl.textContent = `${formatNumber(facebookData.followers)} Seguidores`;
+                        // Lógica de engajamento para Facebook
+                        const engagementRate = ((facebookData.avg_likes + facebookData.avg_comments) / facebookData.followers) * 100;
+                        facebookViewsAvgEl.textContent = formatNumber(facebookData.avg_views);
+                        facebookLikesAvgEl.textContent = formatNumber(facebookData.avg_likes);
+                        facebookCommentsAvgEl.textContent = formatNumber(facebookData.avg_comments);
+                        facebookEngagementRateEl.textContent = `${engagementRate.toFixed(2)}%`;
+                        cardFacebookEl.style.display = 'flex';
+                    }
+                }
+                
+                influencerClassificationEl.textContent = `Classificação: ${getClassification(totalFollowers)}`;
+                loadingMessage.style.display = 'none';
+
+            } else {
+                influencerInfo.style.display = 'none';
+            }
+        }
+
+        async function saveNewInfluencer() {
+            const loadingOverlay = document.getElementById('loading-overlay');
+            loadingOverlay.style.display = 'flex';
+
+            const name = document.getElementById('new-influencer-name').value.trim();
+            const city = document.getElementById('new-influencer-city').value.trim();
+            const youtubeId = document.getElementById('new-youtube-id').value.trim();
+            const instagramHandle = document.getElementById('new-instagram-handle').value.trim();
+            const igFollowers = parseInt(document.getElementById('new-instagram-followers').value) || 0;
+            const igViews = parseInt(document.getElementById('new-instagram-views').value) || 0;
+            const igLikes = parseInt(document.getElementById('new-instagram-likes').value) || 0;
+            const igComments = parseInt(document.getElementById('new-instagram-comments').value) || 0;
+            const tiktokHandle = document.getElementById('new-tiktok-handle').value.trim();
+            const tiktokFollowers = parseInt(document.getElementById('new-tiktok-followers').value) || 0;
+            const tiktokViews = parseInt(document.getElementById('new-tiktok-views').value) || 0;
+            const tiktokLikes = parseInt(document.getElementById('new-tiktok-likes').value) || 0;
+            const tiktokComments = parseInt(document.getElementById('new-tiktok-comments').value) || 0;
+            const facebookHandle = document.getElementById('new-facebook-handle').value.trim();
+            const facebookFollowers = parseInt(document.getElementById('new-facebook-followers').value) || 0;
+            const facebookViews = parseInt(document.getElementById('new-facebook-views').value) || 0;
+            const facebookLikes = parseInt(document.getElementById('new-facebook-likes').value) || 0;
+            const facebookComments = parseInt(document.getElementById('new-facebook-comments').value) || 0;
+
+
+            if (!name) {
+                showAlert("Por favor, preencha o nome do influenciador.");
+                loadingOverlay.style.display = 'none';
+                return;
+            }
+
+            if (!userId) {
+                showAlert("Erro de autenticação. Por favor, recarregue a página.");
+                loadingOverlay.style.display = 'none';
+                return;
+            }
+
+            const newInfluencer = {
+                name: name,
+                city: city,
+                youtube_channel_id: youtubeId,
+                instagram: {
+                    handle: instagramHandle,
+                    followers: igFollowers,
+                    reels_avg_views: igViews,
+                    reels_avg_likes: igLikes,
+                    reels_avg_comments: igComments
+                },
+                tiktok: {
+                    handle: tiktokHandle,
+                    followers: tiktokFollowers,
+                    avg_views: tiktokViews,
+                    avg_likes: tiktokLikes,
+                    avg_comments: tiktokComments
+                },
+                facebook: {
+                    handle: facebookHandle,
+                    followers: facebookFollowers,
+                    avg_views: facebookViews,
+                    avg_likes: facebookLikes,
+                    avg_comments: facebookComments
+                }
+            };
+
+            const influencersCollection = collection(db, 'artifacts', appId, 'users', userId, 'influencers');
+            try {
+                await addDoc(influencersCollection, newInfluencer);
+                document.getElementById('new-influencer-form').reset();
+                showAlert(`Influenciador "${name}" salvo com sucesso!`);
+                closeModal();
+            } catch (error) {
+                console.error("Erro ao salvar no Firestore:", error);
+                showAlert("Erro ao salvar o influenciador. Verifique o console para mais detalhes.");
+            } finally {
+                loadingOverlay.style.display = 'none';
+            }
+        }
+        
+        function openModal() {
+            document.getElementById('newInfluencerModal').style.display = 'block';
+        }
+
+        function closeModal() {
+            document.getElementById('newInfluencerModal').style.display = 'none';
+        }
+        
+        function showAlert(message) {
+            const alertModal = document.getElementById('alertModal');
+            document.getElementById('alertMessage').textContent = message;
+            alertModal.style.display = 'block';
+        }
+
+        window.onclick = function(event) {
+            const modal = document.getElementById('newInfluencerModal');
+            const alertModal = document.getElementById('alertModal');
+            if (event.target == modal) {
+                closeModal();
+            }
+            if (event.target == alertModal) {
+                alertModal.style.display = 'none';
+            }
+        }
+
+        /**
+         * Gera e baixa um arquivo CSV com as métricas do influenciador.
+         */
+        function exportMetricsToCSV() {
+            const influencerName = document.getElementById('influencer-input').value.trim();
+            const influencer = influencersData[influencerName];
+            
+            if (!influencer) {
+                showAlert("Nenhum influenciador selecionado para exportar.");
+                return;
+            }
+
+            // Cabeçalho do arquivo CSV
+            let csvContent = "Rede Social,Nome do Perfil,Link,Seguidores/Inscritos,Visualizações (média),Curtidas (média),Comentários (média),Taxa de Engajamento (%)\n";
+
+            // Função auxiliar para calcular e formatar o engajamento
+            const getEngagementRate = (likes, comments, followers) => {
+                if (followers === 0) return 0;
+                return ((likes + comments) / followers) * 100;
+            };
+
+            // Dados do YouTube
+            if (influencer.youtube_channel_id && influencer.youtube_stats) {
+                const yt = influencer.youtube_stats;
+                const engagement = getEngagementRate(yt.avgLikes, yt.avgComments, yt.subscriberCount);
+                const link = `https://www.youtube.com/channel/${influencer.youtube_channel_id}`;
+                csvContent += `YouTube,"${influencerName}","${link}",${yt.subscriberCount},${yt.avgViews},${yt.avgLikes},${yt.avgComments},${engagement.toFixed(2)}\n`;
+            }
+
+            // Dados do Instagram
+            if (influencer.instagram) {
+                const ig = influencer.instagram;
+                const engagement = getEngagementRate(ig.reels_avg_likes, ig.reels_avg_comments, ig.followers);
+                const link = `https://www.instagram.com/${ig.handle}/`;
+                csvContent += `Instagram,"${influencerName}","${link}",${ig.followers},${ig.reels_avg_views},${ig.reels_avg_likes},${ig.reels_avg_comments},${engagement.toFixed(2)}\n`;
+            }
+
+            // Dados do TikTok
+            if (influencer.tiktok) {
+                const tt = influencer.tiktok;
+                const engagement = getEngagementRate(tt.avg_likes, tt.avg_comments, tt.followers);
+                const link = `https://www.tiktok.com/@${tt.handle}`;
+                csvContent += `TikTok,"${influencerName}","${link}",${tt.followers},${tt.avg_views},${tt.avg_likes},${tt.avg_comments},${engagement.toFixed(2)}\n`;
+            }
+
+            // Dados do Facebook
+            if (influencer.facebook) {
+                const fb = influencer.facebook;
+                const engagement = getEngagementRate(fb.avg_likes, fb.avg_comments, fb.followers);
+                const link = `https://www.facebook.com/${fb.handle}`;
+                csvContent += `Facebook,"${influencerName}","${link}",${fb.followers},${fb.avg_views},${fb.avg_likes},${fb.avg_comments},${engagement.toFixed(2)}\n`;
+            }
+
+            // Cria o Blob e o link para download
+            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+            const link = document.createElement("a");
+            if (link.download !== undefined) {
+                const url = URL.createObjectURL(blob);
+                link.setAttribute("href", url);
+                link.setAttribute("download", `metricas_${influencerName.replace(/\s/g, '_')}.csv`);
+                link.style.visibility = 'hidden';
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+            }
+        }
+    </script>
+</head>
+<body class="p-4 md:p-8">
+    <div id="loading-overlay" class="loading-overlay">
+        <div class="spinner"></div>
+    </div>
+    
+    <div class="max-w-7xl mx-auto space-y-8">
+
+        <!-- Título do Dashboard -->
+        <header class="text-center">
+            <h1 class="text-3xl md:text-4xl font-bold text-gray-800">Home Conteúdo Mapeamento</h1>
+            <p class="mt-2 text-gray-500">Matriz de influência em tempo real.</p>
+        </header>
+
+        <!-- Seção de Seleção de Influenciador e Botão de Cadastro -->
+        <div class="card p-6 space-y-4">
+            <div class="flex flex-col md:flex-row justify-between items-center space-y-4 md:space-y-0">
+                <h2 class="text-xl font-bold text-gray-800">Mapeamento de Influenciador</h2>
+                <button onclick="openModal()" class="bg-purple-500 text-white font-bold px-6 py-2 rounded-md hover:bg-purple-600 focus:outline-none focus:ring focus:ring-purple-300">
+                    Cadastrar Novo Influenciador
+                </button>
+            </div>
+            
+            <div class="relative">
+                <div class="flex items-center gap-2 rounded-md bg-white search-input-container">
+                    <input type="text" id="influencer-input" list="influencer-list" placeholder="Pesquisar ou Selecionar Influenciador" class="flex-grow bg-transparent px-4 py-2 rounded-md">
+                    <datalist id="influencer-list"></datalist>
+                </div>
+                <div id="social-media-selection" class="mt-4 p-4 space-y-2 bg-white rounded-md shadow-lg">
+                    <p class="font-semibold text-gray-700">Selecione as redes sociais:</p>
+                    <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2">
+                        <label class="flex items-center gap-2 text-gray-700">
+                            <input type="checkbox" name="social-media" value="all" class="rounded text-blue-500" checked>
+                            <span>Todos</span>
+                        </label>
+                        <label class="flex items-center gap-2 text-gray-700">
+                            <input type="checkbox" name="social-media" value="youtube" class="rounded text-blue-500" checked>
+                            <span>Youtube</span>
+                        </label>
+                        <label class="flex items-center gap-2 text-gray-700">
+                            <input type="checkbox" name="social-media" value="instagram" class="rounded text-blue-500" checked>
+                            <span>Instagram</span>
+                        </label>
+                        <label class="flex items-center gap-2 text-gray-700">
+                            <input type="checkbox" name="social-media" value="tiktok" class="rounded text-blue-500" checked>
+                            <span>Tik Tok</span>
+                        </label>
+                        <label class="flex items-center gap-2 text-gray-700">
+                            <input type="checkbox" name="social-media" value="facebook" class="rounded text-blue-500" checked>
+                            <span>Facebook</span>
+                        </label>
+                    </div>
+                </div>
+            </div>
+            <button onclick="searchAndDisplayMetrics()" class="bg-blue-500 text-white font-bold px-6 py-2 rounded-md hover:bg-blue-600 focus:outline-none focus:ring focus:ring-blue-300 w-full">
+                Buscar Métricas
+            </button>
+            <p id="loading-message" class="text-center text-gray-500 mt-2">Carregando...</p>
+        </div>
+
+        <!-- Seção de Informações do Influenciador (Inicialmente Oculta) -->
+        <div id="influencer-info" class="card p-6 space-y-2">
+            <div class="flex flex-col md:flex-row items-center md:items-start justify-between w-full">
+                <div class="flex items-center gap-4 mb-4 md:mb-0">
+                    <img id="influencer-profile-pic" class="w-16 h-16 rounded-full border-2 border-gray-300" src="https://placehold.co/64x64/E2E8F0/A0AEC0?text=Foto" alt="Foto do Influenciador">
+                    <div>
+                        <p class="text-gray-500 text-sm">Influenciador Selecionado:</p>
+                        <h2 id="influencer-name" class="text-2xl font-bold text-gray-800"></h2>
+                        <p id="influencer-city" class="text-gray-600"></p>
+                        <p id="influencer-classification" class="text-sm font-semibold text-gray-700 mt-2"></p>
+                    </div>
+                </div>
+                <!-- Botão de exportar -->
+                <button onclick="exportMetricsToCSV()" class="bg-green-500 text-white font-bold px-6 py-2 rounded-md shadow-md hover:bg-green-600 focus:outline-none focus:ring focus:ring-green-300">
+                    Exportar Métricas
+                </button>
+            </div>
+        </div>
+
+        <!-- Cartões de Métricas por Rede Social (Inicialmente Ocultos) -->
+        <div id="metrics-container" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+            
+            <!-- Cartão 1: YouTube -->
+            <div id="card-youtube" class="card social-card p-6 flex items-start justify-between">
+                <div>
+                    <p class="text-gray-500 font-medium text-sm">Youtube</p>
+                    <p id="youtube-metrics" class="text-2xl font-bold text-gray-900 mt-1">0 Inscritos</p>
+                    <div class="text-sm text-gray-500 mt-2 space-y-1">
+                        <div class="flex justify-between gap-4">
+                            <p>Visualizações (média):</p>
+                            <p id="youtube-views-avg">N/A</p>
+                        </div>
+                        <div class="flex justify-between gap-4">
+                            <p>Curtidas (média):</p>
+                            <p id="youtube-likes-avg">N/A</p>
+                        </div>
+                        <div class="flex justify-between gap-4">
+                            <p>Comentários (média):</p>
+                            <p id="youtube-comments-avg">N/A</p>
+                        </div>
+                        <div class="flex justify-between gap-4">
+                            <p>Engajamento:</p>
+                            <p id="youtube-engagement-rate">0.00%</p>
+                        </div>
+                    </div>
+                </div>
+                <img src="https://logodownload.org/wp-content/uploads/2014/10/youtube-logo-0.png" alt="YouTube Logo" class="w-12 h-12 opacity-80">
+            </div>
+
+            <!-- Cartão 2: Instagram -->
+            <div id="card-instagram" class="card social-card p-6 flex items-start justify-between">
+                <div>
+                    <p class="text-gray-500 font-medium text-sm">Instagram</p>
+                    <p id="instagram-metrics" class="text-2xl font-bold text-gray-900 mt-1">0 Seguidores</p>
+                    <div class="text-sm text-gray-500 mt-2 space-y-1">
+                        <div class="flex justify-between gap-4">
+                            <p>Visualizações (média):</p>
+                            <p id="instagram-views-avg">N/A</p>
+                        </div>
+                        <div class="flex justify-between gap-4">
+                            <p>Curtidas (média):</p>
+                            <p id="instagram-likes-avg">N/A</p>
+                        </div>
+                        <div class="flex justify-between gap-4">
+                            <p>Comentários (média):</p>
+                            <p id="instagram-comments-avg">N/A</p>
+                        </div>
+                        <div class="flex justify-between gap-4">
+                            <p>Engajamento:</p>
+                            <p id="instagram-engagement-rate">0.00%</p>
+                        </div>
+                    </div>
+                </div>
+                <img src="https://drive.google.com/uc?export=view&id=184xVn70M_O4tPj6N944Uu8H63n4V1cMh" alt="Instagram Logo" class="w-8 h-8 opacity-80">
+            </div>
+
+            <!-- Cartão 3: TikTok -->
+            <div id="card-tiktok" class="card social-card p-6 flex items-start justify-between">
+                <div>
+                    <p class="text-gray-500 font-medium text-sm">Tik Tok</p>
+                    <p id="tiktok-metrics" class="text-2xl font-bold text-gray-900 mt-1">0 Seguidores</p>
+                    <div class="text-sm text-gray-500 mt-2 space-y-1">
+                        <div class="flex justify-between gap-4">
+                            <p>Visualizações (média):</p>
+                            <p id="tiktok-views-avg">N/A</p>
+                        </div>
+                        <div class="flex justify-between gap-4">
+                            <p>Curtidas (média):</p>
+                            <p id="tiktok-likes-avg">N/A</p>
+                        </div>
+                        <div class="flex justify-between gap-4">
+                            <p>Comentários (média):</p>
+                            <p id="tiktok-comments-avg">N/A</p>
+                        </div>
+                        <div class="flex justify-between gap-4">
+                            <p>Engajamento:</p>
+                            <p id="tiktok-engagement-rate">0.00%</p>
+                        </div>
+                    </div>
+                </div>
+                <img src="https://drive.google.com/uc?export=view&id=1tWw185a_qjK-xY59lW0226R6b32q_T-k" alt="TikTok Logo" class="w-8 h-8 opacity-80">
+            </div>
+
+            <!-- Cartão 4: Facebook -->
+            <div id="card-facebook" class="card social-card p-6 flex items-start justify-between">
+                <div>
+                    <p class="text-gray-500 font-medium text-sm">Facebook</p>
+                    <p id="facebook-metrics" class="text-2xl font-bold text-gray-900 mt-1">0 Seguidores</p>
+                    <div class="text-sm text-gray-500 mt-2 space-y-1">
+                        <div class="flex justify-between gap-4">
+                            <p>Visualizações (média):</p>
+                            <p id="facebook-views-avg">N/A</p>
+                        </div>
+                        <div class="flex justify-between gap-4">
+                            <p>Curtidas (média):</p>
+                            <p id="facebook-likes-avg">N/A</p>
+                        </div>
+                        <div class="flex justify-between gap-4">
+                            <p>Comentários (média):</p>
+                            <p id="facebook-comments-avg">N/A</p>
+                        </div>
+                        <div class="flex justify-between gap-4">
+                            <p>Engajamento:</p>
+                            <p id="facebook-engagement-rate">0.00%</p>
+                        </div>
+                    </div>
+                </div>
+                <img src="https://drive.google.com/uc?export=view&id=14p31Vf8s2e7s-95a2v3L9827v98yK_4Z" alt="Facebook Logo" class="w-8 h-8 opacity-80">
+            </div>
+
+        </div>
+    </div>
+    
+    <!-- Modal de Cadastro de Novo Influenciador -->
+    <div id="newInfluencerModal" class="modal">
+        <div class="modal-content">
+            <span class="close-button" onclick="closeModal()">&times;</span>
+            <h2 class="text-2xl font-bold text-gray-800 mb-4">Cadastrar Novo Influenciador</h2>
+            <form id="new-influencer-form" class="space-y-4">
+                <div>
+                    <label for="new-influencer-name" class="block text-sm font-medium text-gray-700">Nome do Influenciador:</label>
+                    <input type="text" id="new-influencer-name" name="new-influencer-name" required class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+                </div>
+                <div>
+                    <label for="new-influencer-city" class="block text-sm font-medium text-gray-700">Cidade e Estado:</label>
+                    <input type="text" id="new-influencer-city" name="new-influencer-city" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+                </div>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                        <label for="new-youtube-id" class="block text-sm font-medium text-gray-700">ID do Canal do YouTube:</label>
+                        <input type="text" id="new-youtube-id" name="new-youtube-id" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+                    </div>
+                    <div>
+                        <label for="new-instagram-handle" class="block text-sm font-medium text-gray-700">Handle do Instagram:</label>
+                        <input type="text" id="new-instagram-handle" name="new-instagram-handle" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+                    </div>
+                </div>
+                
+                <h3 class="text-lg font-semibold text-gray-800 mt-6">Métricas do Instagram (Opcional)</h3>
+                <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                    <div>
+                        <label for="new-instagram-followers" class="block text-sm font-medium text-gray-700">Seguidores:</label>
+                        <input type="number" id="new-instagram-followers" name="new-instagram-followers" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+                    </div>
+                    <div>
+                        <label for="new-instagram-views" class="block text-sm font-medium text-gray-700">Views (média):</label>
+                        <input type="number" id="new-instagram-views" name="new-instagram-views" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+                    </div>
+                    <div>
+                        <label for="new-instagram-likes" class="block text-sm font-medium text-gray-700">Likes (média):</label>
+                        <input type="number" id="new-instagram-likes" name="new-instagram-likes" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+                    </div>
+                    <div>
+                        <label for="new-instagram-comments" class="block text-sm font-medium text-gray-700">Comentários (média):</label>
+                        <input type="number" id="new-instagram-comments" name="new-instagram-comments" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+                    </div>
+                </div>
+                
+                <h3 class="text-lg font-semibold text-gray-800 mt-6">Métricas do TikTok (Opcional)</h3>
+                <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                    <div>
+                        <label for="new-tiktok-followers" class="block text-sm font-medium text-gray-700">Seguidores:</label>
+                        <input type="number" id="new-tiktok-followers" name="new-tiktok-followers" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+                    </div>
+                    <div>
+                        <label for="new-tiktok-views" class="block text-sm font-medium text-gray-700">Views (média):</label>
+                        <input type="number" id="new-tiktok-views" name="new-tiktok-views" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+                    </div>
+                    <div>
+                        <label for="new-tiktok-likes" class="block text-sm font-medium text-gray-700">Likes (média):</label>
+                        <input type="number" id="new-tiktok-likes" name="new-tiktok-likes" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+                    </div>
+                    <div>
+                        <label for="new-tiktok-comments" class="block text-sm font-medium text-gray-700">Comentários (média):</label>
+                        <input type="number" id="new-tiktok-comments" name="new-tiktok-comments" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+                    </div>
+                </div>
+
+                <h3 class="text-lg font-semibold text-gray-800 mt-6">Métricas do Facebook (Opcional)</h3>
+                <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                    <div>
+                        <label for="new-facebook-followers" class="block text-sm font-medium text-gray-700">Seguidores:</label>
+                        <input type="number" id="new-facebook-followers" name="new-facebook-followers" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+                    </div>
+                    <div>
+                        <label for="new-facebook-views" class="block text-sm font-medium text-gray-700">Views (média):</label>
+                        <input type="number" id="new-facebook-views" name="new-facebook-views" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+                    </div>
+                    <div>
+                        <label for="new-facebook-likes" class="block text-sm font-medium text-gray-700">Likes (média):</label>
+                        <input type="number" id="new-facebook-likes" name="new-facebook-likes" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+                    </div>
+                    <div>
+                        <label for="new-facebook-comments" class="block text-sm font-medium text-gray-700">Comentários (média):</label>
+                        <input type="number" id="new-facebook-comments" name="new-facebook-comments" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+                    </div>
+                </div>
+                
+                <h3 class="text-lg font-semibold text-gray-800 mt-6">Handles (Opcional)</h3>
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div>
+                        <label for="new-tiktok-handle" class="block text-sm font-medium text-gray-700">Handle do TikTok:</label>
+                        <input type="text" id="new-tiktok-handle" name="new-tiktok-handle" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+                    </div>
+                    <div>
+                        <label for="new-facebook-handle" class="block text-sm font-medium text-gray-700">Handle do Facebook:</label>
+                        <input type="text" id="new-facebook-handle" name="new-facebook-handle" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+                    </div>
+                </div>
+
+                <div class="flex justify-end pt-4">
+                    <button type="button" onclick="saveNewInfluencer()" class="bg-blue-500 text-white font-bold px-6 py-2 rounded-md hover:bg-blue-600 focus:outline-none focus:ring focus:ring-blue-300">
+                        Salvar
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Modal de Alerta -->
+    <div id="alertModal" class="modal">
+        <div class="modal-content">
+            <span class="close-button" onclick="document.getElementById('alertModal').style.display='none'">&times;</span>
+            <p id="alertMessage" class="text-center text-red-500 font-semibold"></p>
+        </div>
+    </div>
+</body>
+</html>
